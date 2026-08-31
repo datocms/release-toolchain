@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stands in for the real thing on $PATH; see impl.mjs.
+exec node "$SHIM_RUN" npm "$@"
