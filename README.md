@@ -110,9 +110,24 @@ bumps the version, writes the changelog, commits, tags and publishes the release
 notes. Nothing reaches npm.
 
 Nothing changes in the eleven repositories until someone moves their
-`devDependency` to the new tag. No bot does that today, so open those PRs by
-hand. To spot a repository left behind, read its release log: the preflight
-banner prints the toolchain version on every run.
+`devDependency` to the new tag, and moving it takes a real install:
+
+```
+npm install @datocms/release-toolchain@github:datocms/release-toolchain#v1.2.0 --save-dev
+```
+
+Editing the spec in `package.json` and running `npm install` is not enough. npm
+keeps the commit the lockfile already resolved, so `npm ci` goes on installing
+the old version while `package.json` claims the new one, and nothing warns you.
+Check what landed rather than what you asked for:
+
+```
+node -e "console.log(require('@datocms/release-toolchain/package.json').version)"
+```
+
+No bot opens those eleven PRs today, so do it by hand. To spot a repository left
+behind, read its release log: the preflight banner prints the toolchain version
+on every run.
 
 ## npm two-factor
 
