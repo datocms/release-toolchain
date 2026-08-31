@@ -7,5 +7,9 @@
   "fixed": [],
   "linked": [],
   "updateInternalDependencies": "patch",
-  "ignore": []
+  "ignore": [],
+  "privatePackages": {
+    "version": true,
+    "tag": false
+  }
 }
