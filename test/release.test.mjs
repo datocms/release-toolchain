@@ -229,3 +229,40 @@ describe('the beforeCommit hook', () => {
     assert.match(repo.git('show', '--stat', '--format=', 'HEAD'), /STAMPED/);
   });
 });
+
+describe('a release that died after the publish', () => {
+  // The hardest resume: the package is on the registry AND its tag is here, so
+  // changesets reports an empty plan. Only the push and the release notes are
+  // missing, and nothing but this script knows that.
+  it('pushes and announces what changesets considers finished', () => {
+    const repo = single({ pendingChangeset: false });
+    // The wreckage a SIGKILL between `changeset publish` and `git push` leaves.
+    repo.git('tag', '-a', 'v0.0.1', '-m', 'v0.0.1');
+    repo.git('commit', '--allow-empty', '-m', 'release: v0.0.1');
+
+    const { calls, output } = runRelease({
+      root: repo.root,
+      scenario: { tagShape: 'root', releases: [], announced: [] },
+    });
+
+    assert.match(output, /v0\.0\.1 \(already on npm\)/);
+    assert.ok(ran(calls, 'gh', 'release', 'create'));
+    assert.equal(
+      repo.git('rev-parse', 'HEAD'),
+      repo.git('rev-parse', 'origin/main'),
+    );
+  });
+
+  it('still refuses when the tag is pushed and the release exists', () => {
+    const repo = single({ pendingChangeset: false });
+    repo.git('tag', '-a', 'v0.0.1', '-m', 'v0.0.1');
+    repo.git('push', '-q', 'origin', 'v0.0.1');
+
+    const { output } = runReleaseExpectingFailure({
+      root: repo.root,
+      scenario: { tagShape: 'root', releases: [], announced: ['v0.0.1'] },
+    });
+
+    assert.match(output, /there is nothing to release/);
+  });
+});

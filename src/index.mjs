@@ -143,6 +143,50 @@ const tagShape = (tool) => (release) =>
     : `v${release.version}`;
 
 /**
+ * What is left of a release that died after `changeset publish`.
+ *
+ * Once a package is on the registry and its tag exists here, changesets calls
+ * it done and reports an empty plan: `splitByTagStatus` treats a local tag as
+ * proof. But the tag may still be missing from origin, and the GitHub release
+ * may never have been written. Those two steps belong to this script, so this
+ * script has to work out for itself that they are outstanding.
+ *
+ * Read from the versions in the working tree, which `changeset version` has
+ * already bumped, and asked only when the plan is empty: on a normal release
+ * the plan covers everything and this costs nothing.
+ */
+const unfinishedReleases = (packages, tagFor) => {
+  const onOrigin = new Set(
+    capture('git', ['ls-remote', '--tags', 'origin'])
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => line.split('\t')[1] ?? '')
+      .map((ref) => ref.replace(/^refs\/tags\//, '').replace(/\^\{\}$/, '')),
+  );
+  // One call rather than one per package. A release too old to appear here is
+  // a false positive, and costs a `gh release view` that skips it.
+  const announced = new Set(
+    JSON.parse(
+      capture('gh', ['release', 'list', '--limit', '100', '--json', 'tagName']),
+    ).map((entry) => entry.tagName),
+  );
+
+  return packages
+    .map((pkg) => ({
+      kind: 'tag-only',
+      name: pkg.packageJson.name,
+      version: pkg.packageJson.version,
+    }))
+    .filter((entry) => {
+      const tag = tagFor(entry);
+      if (!succeeds('git', ['rev-parse', '--verify', `refs/tags/${tag}`])) {
+        return false;
+      }
+      return !onOrigin.has(tag) || !announced.has(tag);
+    });
+};
+
+/**
  * The commit subject for a release, and its body when there is one.
  *
  * With independent versioning a release moves an arbitrary number of packages
@@ -310,14 +354,20 @@ export const release = async ({
 
   step('Reading the publish plan');
   const plan = publishPlan();
-  for (const entry of plan) {
+  // An empty plan does not mean there is nothing to do: a run that died after
+  // `changeset publish` left the packages on the registry and their tags here,
+  // which is all changesets looks at, while the push and the release notes
+  // never happened.
+  const releases = plan.length > 0 ? plan : unfinishedReleases(packages, tagFor);
+  for (const entry of releases) {
     console.log(
       `  ${tagFor(entry)}${entry.kind === 'tag-only' ? ' (already on npm)' : ''}`,
     );
   }
-  if (plan.length === 0) {
+  if (releases.length === 0) {
     fail(
-      'there is nothing to release: every package is already published and tagged.\n' +
+      'there is nothing to release: every package is published, tagged, pushed\n' +
+        '  and announced.\n' +
         "  Describe your changes with 'npx changeset' first.",
     );
   }
@@ -328,7 +378,7 @@ export const release = async ({
     }
 
     step('Committing the release');
-    const message = commitMessage(plan, tagFor);
+    const message = commitMessage(releases, tagFor);
     run('git', ['add', '-A']);
     run('git', ['commit', ...message.flatMap((part) => ['-m', part])]);
   }
@@ -345,7 +395,7 @@ export const release = async ({
   // this point the tags are pushed and a GitHub release is created per tag; a
   // mismatch found *there* is found after the push, with npm already committed.
   step('Verifying the tags');
-  const missing = plan
+  const missing = releases
     .map(tagFor)
     .filter(
       (tag) => !succeeds('git', ['rev-parse', '--verify', `refs/tags/${tag}`]),
@@ -367,7 +417,7 @@ export const release = async ({
   // redo by hand from the changelog if it goes wrong.
   // -------------------------------------------------------------------------
   step('Publishing the release notes');
-  for (const entry of plan) {
+  for (const entry of releases) {
     const { name, version } = entry;
     const tag = tagFor(entry);
     if (succeeds('gh', ['release', 'view', tag])) {

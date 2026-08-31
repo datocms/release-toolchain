@@ -82,6 +82,12 @@ export const main = (tool) => {
   if (tool === 'gh') {
     // `release view` failing is the answer "no such release yet".
     if (args[0] === 'release' && args[1] === 'view') process.exit(1);
+    if (args[0] === 'release' && args[1] === 'list') {
+      const s = scenario();
+      return console.log(
+        JSON.stringify((s.announced ?? []).map((tagName) => ({ tagName }))),
+      );
+    }
     return;
   }
 };
