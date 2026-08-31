@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SHIMS = path.join(here, 'shims');
-const BIN = path.join(here, '..', 'src', 'bin.mjs');
+export const BIN = path.join(here, '..', 'src', 'bin.mjs');
 
 const git = (cwd, ...args) =>
   execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();

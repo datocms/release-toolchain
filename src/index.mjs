@@ -89,6 +89,30 @@ export const reportFailure = (error) => {
   console.error(`\n\x1b[31mAborted: ${detail}\x1b[0m`);
 };
 
+/**
+ * Set while this script publishes, and read by the `prepublishOnly` guard in
+ * the packages that opt into it.
+ */
+export const RELEASE_ENV = 'DATOCMS_RELEASE';
+
+/**
+ * The check a package runs from `prepublishOnly`, as
+ * `release-toolchain --assert-release`.
+ *
+ * `npm publish` typed by hand skips the tests, the changelog, the tag and the
+ * GitHub release, and npm accepts it whenever the version in the working tree
+ * is one the registry has not seen. This turns that into a refusal.
+ */
+export const assertRelease = () => {
+  if (process.env[RELEASE_ENV]) return;
+  fail(
+    "this package is published by 'npm run release'.\n" +
+      '  A bare `npm publish` skips the tests, the changelog, the tag and the\n' +
+      '  GitHub release, so it is refused here.\n' +
+      "  To inspect the tarball without publishing, run 'npm pack'.",
+  );
+};
+
 const toolchainVersion = () =>
   JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
     .version;
@@ -388,7 +412,12 @@ export const release = async ({
   // accepted.
   // -------------------------------------------------------------------------
   step('Publishing to npm and tagging');
-  run('npx', ['changeset', 'publish', ...(distTag ? ['--tag', distTag] : [])]);
+  // The one moment a package may reach the registry. Packages that guard
+  // themselves with `release-toolchain --assert-release` in `prepublishOnly`
+  // look for this and refuse every other `npm publish`.
+  run('npx', ['changeset', 'publish', ...(distTag ? ['--tag', distTag] : [])], {
+    env: { ...process.env, [RELEASE_ENV]: '1' },
+  });
 
   // The tag shape is derived twice — here and inside changesets — so check that
   // the two agree while the only thing that has happened is a publish. Past

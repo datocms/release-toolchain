@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
+import { execFileSync } from 'node:child_process';
 import {
+  BIN,
   makeRepo,
   ran,
   runRelease,
@@ -264,5 +266,54 @@ describe('a release that died after the publish', () => {
     });
 
     assert.match(output, /there is nothing to release/);
+  });
+});
+
+describe('the publish guard', () => {
+  const assertRelease = (env) => {
+    try {
+      execFileSync(process.execPath, [BIN, '--assert-release'], {
+        encoding: 'utf8',
+        env: { ...process.env, DATOCMS_RELEASE: undefined, ...env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return { status: 0, output: '' };
+    } catch (error) {
+      return { status: error.status, output: String(error.stderr) };
+    }
+  };
+
+  it('refuses a publish nobody asked for', () => {
+    const { status, output } = assertRelease({});
+    assert.equal(status, 1);
+    assert.match(output, /published by 'npm run release'/);
+    assert.match(output, /npm pack/);
+  });
+
+  it('lets the release through', () => {
+    assert.equal(assertRelease({ DATOCMS_RELEASE: '1' }).status, 0);
+  });
+
+  it('is set for the publish step and nothing else', () => {
+    const repo = single();
+    const { calls } = runRelease({
+      root: repo.root,
+      scenario: {
+        tagShape: 'root',
+        releases: [{ name: 'lonely-package', version: '0.0.2' }],
+      },
+    });
+
+    const publish = calls.find(
+      (call) => call.tool === 'npx' && call.args[1] === 'publish',
+    );
+    assert.equal(publish.release, '1');
+    // The build and the tests must not look like a release to a guarded
+    // package that happens to run one.
+    assert.equal(
+      calls.find((call) => call.tool === 'npm' && call.args[0] === 'test')
+        .release,
+      null,
+    );
   });
 });

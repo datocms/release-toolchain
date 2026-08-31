@@ -85,6 +85,24 @@ publish plan, and before `git add -A && git commit`. You also get `run`,
 `capture`, `succeeds`, `step`, `fail` and `Aborted`, so a hook that shells out
 prints and fails the way a built-in step does.
 
+## Refusing a publish nobody asked for
+
+`npm publish` typed by hand skips the tests, the changelog, the tag and the
+GitHub release, and npm accepts it whenever the version in the working tree is
+one the registry has not seen. A package that wants that refused guards itself:
+
+```json
+"scripts": {
+  "prepublishOnly": "release-toolchain --assert-release"
+}
+```
+
+The check passes while this script runs the publish and fails everywhere else.
+`npm pack` still works, so you can read the tarball without turning the guard
+off. The seven single-package repositories carry it, because there `npm publish`
+at the repository root is the accident that reaches the registry. In the four
+workspaces the root is private, so the same slip publishes nothing.
+
 ## Releasing this package
 
 Run `npx changeset` in the PR, then `npm run release` on `main`. The script

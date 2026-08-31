@@ -54,7 +54,7 @@ export const main = (tool) => {
   const args = process.argv.slice(3);
   appendFileSync(
     process.env.SHIM_LOG,
-    `${JSON.stringify({ tool, args })}\n`,
+    `${JSON.stringify({ tool, args, release: process.env.DATOCMS_RELEASE ?? null })}\n`,
   );
 
   if (tool === 'npm') {
