@@ -322,6 +322,70 @@ describe('a release from a public mirror', () => {
   });
 });
 
+describe('changesets pre mode', () => {
+  const preMode = (mode, tag) =>
+    single({
+      extraFiles: { '.changeset/pre.json': { mode, tag, initialVersions: {} } },
+    });
+  const prerelease = {
+    tagShape: 'root',
+    releases: [{ name: 'lonely-package', version: '0.0.2-next.0' }],
+  };
+  const publishArgs = (calls) =>
+    calls.find((call) => call.tool === 'npx' && call.args[1] === 'publish')
+      .args;
+
+  it('publishes under the tag of pre.json, without --tag', () => {
+    const repo = preMode('pre', 'next');
+    const { calls } = runRelease({
+      root: repo.root,
+      argv: ['--tag', 'next'],
+      scenario: prerelease,
+    });
+
+    assert.deepEqual(publishArgs(calls), ['changeset', 'publish']);
+    const notes = calls.find(
+      (call) => call.tool === 'gh' && call.args[1] === 'create',
+    );
+    assert.ok(notes.args.includes('--prerelease'));
+  });
+
+  it('refuses another tag before it changes anything', () => {
+    const repo = preMode('pre', 'next');
+    const { output, calls } = runReleaseExpectingFailure({
+      root: repo.root,
+      argv: ['--tag', 'beta'],
+      scenario: prerelease,
+    });
+
+    assert.match(output, /pre mode with the tag "next"/);
+    assert.equal(ran(calls, 'npx', 'changeset', 'version'), false);
+  });
+
+  it('refuses a release without --tag', () => {
+    const repo = preMode('pre', 'next');
+    const { output } = runReleaseExpectingFailure({
+      root: repo.root,
+      scenario: prerelease,
+    });
+
+    assert.match(output, /changeset pre exit/);
+  });
+
+  it('lets a release through after pre exit', () => {
+    const repo = preMode('exit', 'next');
+    const { calls } = runRelease({
+      root: repo.root,
+      scenario: {
+        tagShape: 'root',
+        releases: [{ name: 'lonely-package', version: '0.0.2' }],
+      },
+    });
+
+    assert.deepEqual(publishArgs(calls), ['changeset', 'publish']);
+  });
+});
+
 describe('a release that died after the publish', () => {
   // The hardest resume: the package is on the registry AND its tag is here, so
   // changesets reports an empty plan. Only the push and the release notes are

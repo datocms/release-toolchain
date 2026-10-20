@@ -347,18 +347,34 @@ export const release = async ({
 
   const branch = capture('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
 
+  // In pre mode, `changeset publish` refuses `--tag` and publishes under the
+  // tag of `.changeset/pre.json`. After `changeset pre exit` the file stays
+  // until the next `changeset version`, with the mode "exit".
+  const preTag = (() => {
+    if (!existsSync('.changeset/pre.json')) return undefined;
+    const preState = JSON.parse(readFileSync('.changeset/pre.json', 'utf8'));
+    return preState.mode === 'pre' ? preState.tag : undefined;
+  })();
+
   if (!distTag) {
     if (branch !== releaseBranch) {
       fail(
         `you are not on ${releaseBranch}. Use --tag to publish a prerelease from a branch.`,
       );
     }
-    if (existsSync('.changeset/pre.json')) {
+    if (preTag) {
       fail(
         'the repo is in changesets pre mode (.changeset/pre.json).\n' +
           "  Run 'npx changeset pre exit' before cutting a real release.",
       );
     }
+  }
+  if (preTag && distTag !== preTag) {
+    fail(
+      `the repo is in changesets pre mode with the tag "${preTag}", and changesets\n` +
+        `  publishes only under that tag. Run with '--tag ${preTag}', or change\n` +
+        '  the tag in .changeset/pre.json.',
+    );
   }
 
   if (capture('git', ['status', '--porcelain'])) {
@@ -463,7 +479,8 @@ export const release = async ({
   // The one moment a package may reach the registry. Packages that guard
   // themselves with `release-toolchain --assert-release` in `prepublishOnly`
   // look for this and refuse every other `npm publish`.
-  run('npx', ['changeset', 'publish', ...(distTag ? ['--tag', distTag] : [])], {
+  const tagArgs = distTag && !preTag ? ['--tag', distTag] : [];
+  run('npx', ['changeset', 'publish', ...tagArgs], {
     env: { ...process.env, [RELEASE_ENV]: '1' },
   });
 

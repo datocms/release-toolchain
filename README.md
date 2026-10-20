@@ -40,6 +40,11 @@ Nine of the eleven repositories add two scripts and no file of their own:
 the `next` npm dist-tag and marks the GitHub releases as prereleases, so
 `latest` stays where it is.
 
+In changesets pre mode (`npx changeset pre enter next`), `changeset publish`
+refuses `--tag` and publishes under the tag of `.changeset/pre.json`. The
+script then asks that `--tag` names that same tag, and refuses another one
+before it changes anything.
+
 Do not call the script `publish`. In a single-package repository the root is the
 published package, so `changeset publish` shells out to `npm publish`, npm runs
 the repository's own `publish` script, and you are back at the top of your own
