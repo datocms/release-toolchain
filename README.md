@@ -55,10 +55,10 @@ release script.
 | build, test | the root `package.json`'s `build` and `test` scripts |
 | what to publish | `changeset publish-plan`, registry lookups included |
 
-You get no options. A repository that needs a different build changes its own
-`build` script, and contributors know where that lives.
+You get no options for these. A repository that needs a different build changes
+its own `build` script, and contributors know where that lives.
 
-## The one hook
+## The hooks
 
 Two repositories rewrite generated files between the version bump and the
 release commit. They call `release()` rather than the binary:
@@ -84,6 +84,29 @@ try {
 publish plan, and before `git add -A && git commit`. You also get `run`,
 `capture`, `succeeds`, `step`, `fail` and `Aborted`, so a hook that shells out
 prints and fails the way a built-in step does.
+
+### Releasing from a public mirror
+
+A private repository can publish its packages from a public mirror. The
+GitHub releases then go to the mirror, and the mirror needs the tags first:
+
+```js
+await release({
+  releaseRepo: 'datocms/plugins-sdk',
+  afterPush: ({ releases, tagFor }) =>
+    run('node', ['mirror/sync.mjs', ...releases.map(tagFor)]),
+});
+```
+
+`releaseRepo` adds `--repo` to each `gh release` call: the list of a resumed
+release, the check that a release exists, and the creation. The preflight
+refuses to start when your `gh` account cannot write to that repository, so a
+missing permission stops the release before `npm publish`.
+
+`afterPush({ root, releases, tagFor, distTag, branch })` runs after
+`git push` and before the release notes, and `--verify-tag` then finds the
+tags it pushed. A resumed release runs it again, so it must do no harm a
+second time: skip a commit with no change and a tag that exists.
 
 ## Refusing a publish nobody asked for
 

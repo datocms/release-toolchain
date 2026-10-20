@@ -20,10 +20,11 @@
 // Nothing here is configurable. Every repository-specific fact is *derived* —
 // the root and the tag shape from `@manypkg/get-packages`, the release branch
 // from `.changeset/config.json`, the build and test commands from the root
-// `package.json`. The single escape hatch is the `beforeCommit` hook, for the
-// two repos that have to rewrite generated files between the version bump and
-// the release commit. If a repo needs a different build, it changes its own
-// `build` script.
+// `package.json`. The escape hatches are for the repos that call `release()`
+// from a script of their own. The `beforeCommit` hook rewrites generated files
+// between the version bump and the release commit. The `releaseRepo` option
+// and the `afterPush` hook are for a private repo that releases from a public
+// mirror. If a repo needs a different build, it changes its own `build` script.
 
 import { execFileSync } from 'node:child_process';
 import {
@@ -179,7 +180,7 @@ const tagShape = (tool) => (release) =>
  * already bumped, and asked only when the plan is empty: on a normal release
  * the plan covers everything and this costs nothing.
  */
-const unfinishedReleases = (packages, tagFor) => {
+const unfinishedReleases = (packages, tagFor, ghRelease) => {
   const onOrigin = new Set(
     capture('git', ['ls-remote', '--tags', 'origin'])
       .split('\n')
@@ -191,7 +192,7 @@ const unfinishedReleases = (packages, tagFor) => {
   // a false positive, and costs a `gh release view` that skips it.
   const announced = new Set(
     JSON.parse(
-      capture('gh', ['release', 'list', '--limit', '100', '--json', 'tagName']),
+      capture('gh', ghRelease('list', '--limit', '100', '--json', 'tagName')),
     ).map((entry) => entry.tagName),
   );
 
@@ -231,6 +232,34 @@ const commitMessage = (plan, tagFor) => {
 };
 
 /**
+ * Refuses a release that cannot write to the repository of the GitHub
+ * releases. The check runs before the publish, because after the publish a
+ * missing permission leaves packages on npm with no release notes.
+ */
+const assertCanWrite = (repo) => {
+  let permission = '';
+  try {
+    permission = capture('gh', [
+      'repo',
+      'view',
+      repo,
+      '--json',
+      'viewerPermission',
+      '--jq',
+      '.viewerPermission',
+    ]);
+  } catch {
+    // The permission stays empty, thus the check below refuses.
+  }
+  if (!['ADMIN', 'MAINTAIN', 'WRITE'].includes(permission)) {
+    fail(
+      `you cannot write to ${repo}, which gets the tags and the release notes.\n` +
+        '  Ask for write access, or log in to gh with an account that has it.',
+    );
+  }
+};
+
+/**
  * @param {object} [options]
  * @param {(context: {
  *   root: string, packages: object[], tool: object,
@@ -239,10 +268,22 @@ const commitMessage = (plan, tagFor) => {
  *   Runs after `changeset version` and the lockfile refresh, after the publish
  *   plan has been read, and before `git add -A && git commit` — the one place
  *   where a repo can rewrite files that have to carry the new version number.
+ * @param {string} [options.releaseRepo] The GitHub repository (`owner/name`)
+ *   that gets the GitHub releases. Defaults to the repository of the working
+ *   folder. The tags must be in that repository before the release notes:
+ *   push them from `afterPush`.
+ * @param {(context: {
+ *   root: string, releases: object[], tagFor: (release: object) => string,
+ *   distTag: string, branch: string,
+ * }) => void | Promise<void>} [options.afterPush]
+ *   Runs after the push and before the release notes, also in a resumed
+ *   release. Thus it must do no harm when it runs a second time.
  * @param {string[]} [options.argv] Defaults to the process arguments.
  */
 export const release = async ({
   beforeCommit,
+  releaseRepo,
+  afterPush,
   argv = process.argv.slice(2),
 } = {}) => {
   // The only flag: `--tag next` publishes under that npm dist-tag instead of
@@ -258,6 +299,11 @@ export const release = async ({
   process.chdir(rootDir);
 
   const tagFor = tagShape(tool);
+  const ghRelease = (...args) => [
+    'release',
+    ...args,
+    ...(releaseRepo ? ['--repo', releaseRepo] : []),
+  ];
   const dirOf = new Map(
     packages.map((pkg) => [pkg.packageJson.name, pkg.relativeDir]),
   );
@@ -345,6 +391,7 @@ export const release = async ({
       "the GitHub CLI is missing or logged out, so the release notes can't be published.",
     );
   }
+  if (releaseRepo) assertCanWrite(releaseRepo);
 
   const npmUser = capture('npm', ['whoami']);
   console.log(`on ${branch}, in sync with origin, npm user: ${npmUser}`);
@@ -382,7 +429,8 @@ export const release = async ({
   // `changeset publish` left the packages on the registry and their tags here,
   // which is all changesets looks at, while the push and the release notes
   // never happened.
-  const releases = plan.length > 0 ? plan : unfinishedReleases(packages, tagFor);
+  const releases =
+    plan.length > 0 ? plan : unfinishedReleases(packages, tagFor, ghRelease);
   for (const entry of releases) {
     console.log(
       `  ${tagFor(entry)}${entry.kind === 'tag-only' ? ' (already on npm)' : ''}`,
@@ -440,6 +488,10 @@ export const release = async ({
   step('Pushing to GitHub');
   run('git', ['push', '--follow-tags', 'origin', branch]);
 
+  if (afterPush) {
+    await afterPush({ root: rootDir, releases, tagFor, distTag, branch });
+  }
+
   // -------------------------------------------------------------------------
   // The release notes: one GitHub release per tag, its body the CHANGELOG
   // section changesets just wrote. Last, because it's the only step a human can
@@ -449,7 +501,7 @@ export const release = async ({
   for (const entry of releases) {
     const { name, version } = entry;
     const tag = tagFor(entry);
-    if (succeeds('gh', ['release', 'view', tag])) {
+    if (succeeds('gh', ghRelease('view', tag))) {
       console.log(`${tag}: the release already exists, leaving it alone`);
       continue;
     }
@@ -461,7 +513,7 @@ export const release = async ({
       changelogSection(dirOf.get(name), version) || `Released \`${tag}\`.`;
     // --verify-tag: refuse to invent a release for a tag the push didn't carry.
     const args = ['--title', tag, '--verify-tag', '--notes-file', '-'];
-    run('gh', ['release', 'create', tag, ...args, ...prerelease], {
+    run('gh', ghRelease('create', tag, ...args, ...prerelease), {
       input: notes,
       stdio: ['pipe', 'inherit', 'inherit'],
     });

@@ -232,6 +232,96 @@ describe('the beforeCommit hook', () => {
   });
 });
 
+describe('a release from a public mirror', () => {
+  const mirrorConsumer = fileURLToPath(
+    new URL('mirror-consumer.mjs', import.meta.url),
+  );
+  const ghReleases = (calls) =>
+    calls.filter((call) => call.tool === 'gh' && call.args[0] === 'release');
+
+  it('sends every gh release to the release repository', () => {
+    const repo = single({ pendingChangeset: false });
+    repo.git('tag', '-a', 'v0.0.1', '-m', 'v0.0.1');
+    repo.git('commit', '--allow-empty', '-m', 'release: v0.0.1');
+
+    const { calls } = runRelease({
+      root: repo.root,
+      entry: mirrorConsumer,
+      scenario: { tagShape: 'root', releases: [], announced: [] },
+    });
+
+    const subcommands = ghReleases(calls).map((call) => call.args[1]);
+    assert.deepEqual(subcommands, ['list', 'view', 'create']);
+    for (const call of ghReleases(calls)) {
+      const at = call.args.indexOf('--repo');
+      assert.equal(call.args[at + 1], 'acme/public-mirror');
+    }
+  });
+
+  it('runs afterPush after the push and before the release notes', () => {
+    const repo = workspace();
+    const { calls } = runRelease({
+      root: repo.root,
+      entry: mirrorConsumer,
+      argv: ['--tag', 'next'],
+      scenario: {
+        releases: [
+          { dir: 'packages/a', name: '@scope/a', version: '1.1.0-next.0' },
+        ],
+      },
+    });
+
+    const order = calls.map((call) => call.tool);
+    const hook = order.indexOf('afterPush');
+    const notes = calls.findIndex(
+      (call) => call.tool === 'gh' && call.args[1] === 'create',
+    );
+    assert.ok(hook !== -1 && hook < notes);
+    const publish = calls.findIndex(
+      (call) => call.tool === 'npx' && call.args[1] === 'publish',
+    );
+    assert.ok(hook > publish);
+
+    const handed = JSON.parse(
+      readFileSync(path.join(repo.root, '..', 'hook.json'), 'utf8'),
+    );
+    assert.deepEqual(handed.tags, ['@scope/a@1.1.0-next.0']);
+    assert.equal(handed.distTag, 'next');
+    assert.equal(handed.branch, 'main');
+  });
+
+  it('runs afterPush again in a resumed release', () => {
+    const repo = single({ pendingChangeset: false });
+    repo.git('tag', '-a', 'v0.0.1', '-m', 'v0.0.1');
+    repo.git('push', '-q', 'origin', 'main', 'v0.0.1');
+
+    const { calls } = runRelease({
+      root: repo.root,
+      entry: mirrorConsumer,
+      scenario: { tagShape: 'root', releases: [], announced: [] },
+    });
+
+    assert.ok(ran(calls, 'afterPush', 'v0.0.1'));
+    assert.ok(ran(calls, 'gh', 'release', 'create', 'v0.0.1'));
+  });
+
+  it('refuses before the publish without write access', () => {
+    const repo = single();
+    const { output, calls } = runReleaseExpectingFailure({
+      root: repo.root,
+      entry: mirrorConsumer,
+      scenario: {
+        tagShape: 'root',
+        releases: [{ name: 'lonely-package', version: '0.0.2' }],
+        permission: 'READ',
+      },
+    });
+
+    assert.match(output, /cannot write to acme\/public-mirror/);
+    assert.equal(ran(calls, 'npx', 'changeset', 'publish'), false);
+  });
+});
+
 describe('a release that died after the publish', () => {
   // The hardest resume: the package is on the registry AND its tag is here, so
   // changesets reports an empty plan. Only the push and the release notes are
