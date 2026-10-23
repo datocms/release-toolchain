@@ -212,6 +212,47 @@ const unfinishedReleases = (packages, tagFor, ghRelease) => {
 };
 
 /**
+ * The releases that wait on npm as staged versions, each with its stage id.
+ *
+ * npm stages a version when the publish needs a 2FA approval. The registry does
+ * not show a staged version, so the publish plan calls it new. A second
+ * `npm publish` of it then fails with "409 Cannot publish over previously
+ * staged version".
+ */
+const stagedReleases = (releases) => {
+  const stageIds = new Map();
+  for (const name of new Set(releases.map((entry) => entry.name))) {
+    let items = [];
+    try {
+      items = JSON.parse(capture('npm', ['stage', 'list', name, '--json']));
+    } catch {
+      // npm older than 11.15 has no `npm stage`, thus it has no staged versions.
+    }
+    for (const item of items) {
+      stageIds.set(`${item.packageName}@${item.version}`, item.id);
+    }
+  }
+  return releases.flatMap((entry) => {
+    const id = stageIds.get(`${entry.name}@${entry.version}`);
+    return id ? [{ ...entry, stageId: id }] : [];
+  });
+};
+
+const refuseStaged = (staged, situation) => {
+  if (staged.length === 0) return;
+  fail(
+    `npm holds a staged version that waits for an approval.\n${situation}\n` +
+      '  Approve each one on npmjs.com, or with these commands, and run this again:\n' +
+      staged
+        .map(
+          (entry) =>
+            `    npm stage approve ${entry.stageId}   # ${entry.name}@${entry.version}`,
+        )
+        .join('\n'),
+  );
+};
+
+/**
  * The commit subject for a release, and its body when there is one.
  *
  * With independent versioning a release moves an arbitrary number of packages
@@ -476,6 +517,11 @@ export const release = async ({
   // accepted.
   // -------------------------------------------------------------------------
   step('Publishing to npm and tagging');
+  const toPublish = releases.filter((entry) => entry.kind === 'publish');
+  refuseStaged(
+    stagedReleases(toPublish),
+    '  An earlier run staged it, and nothing was published in this run.',
+  );
   // The one moment a package may reach the registry. Packages that guard
   // themselves with `release-toolchain --assert-release` in `prepublishOnly`
   // look for this and refuse every other `npm publish`.
@@ -483,6 +529,13 @@ export const release = async ({
   run('npx', ['changeset', 'publish', ...tagArgs], {
     env: { ...process.env, [RELEASE_ENV]: '1' },
   });
+  // changesets tags a staged version as a published one. We stop before the
+  // push, because a GitHub release must not announce a version nobody can
+  // install.
+  refuseStaged(
+    stagedReleases(toPublish),
+    '  The tags are here, and nothing is pushed.',
+  );
 
   // The tag shape is derived twice — here and inside changesets — so check that
   // the two agree while the only thing that has happened is a publish. Past
@@ -501,9 +554,37 @@ export const release = async ({
         '  @changesets/cli still tags releases the way this script expects.',
     );
   }
+  // `git push --follow-tags` sends only the tags of commits that it pushes. A
+  // tag on a commit that a rebase replaced thus never gets to origin.
+  const offBranch = releases
+    .map(tagFor)
+    .filter(
+      (tag) =>
+        !succeeds('git', ['merge-base', '--is-ancestor', `refs/tags/${tag}`, 'HEAD']),
+    );
+  if (offBranch.length > 0) {
+    fail(
+      `${offBranch.join(', ')} is not in the history of ${branch}. A rebase of the\n` +
+        '  release commit causes this. Move each tag to the release commit, and run\n' +
+        '  this again:\n' +
+        offBranch
+          .map((tag) => `    git tag -f -a ${tag} -m ${tag} <release commit>`)
+          .join('\n') +
+        "\n  If origin has the tag, also run 'git push -f origin refs/tags/<tag>'.",
+    );
+  }
 
   step('Pushing to GitHub');
-  run('git', ['push', '--follow-tags', 'origin', branch]);
+  // Without --atomic, git sends the tags also when origin refuses the branch.
+  try {
+    run('git', ['push', '--atomic', '--follow-tags', 'origin', branch]);
+  } catch {
+    fail(
+      `origin refused the push, and nothing got to origin: the branch and the tags\n` +
+        '  push together or not at all. The packages are on npm.\n' +
+        `  If origin/${branch} has new commits, run 'git pull --rebase', and run this again.`,
+    );
+  }
 
   if (afterPush) {
     await afterPush({ root: rootDir, releases, tagFor, distTag, branch });

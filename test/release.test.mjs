@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
@@ -192,6 +192,86 @@ describe('the tag check', () => {
       repo.git('rev-parse', 'HEAD') === repo.git('rev-parse', 'origin/main'),
       false,
     );
+  });
+});
+
+describe('a staged version', () => {
+  const staged = [
+    { id: 'stage-1', packageName: 'lonely-package', version: '0.0.2' },
+  ];
+
+  it('stops before the push when the publish only staged it', () => {
+    const repo = single();
+    const { output, calls } = runReleaseExpectingFailure({
+      root: repo.root,
+      scenario: {
+        tagShape: 'root',
+        releases: [{ name: 'lonely-package', version: '0.0.2' }],
+        stagedByPublish: staged,
+      },
+    });
+
+    assert.match(output, /waits for an approval/);
+    assert.match(output, /npm stage approve stage-1/);
+    assert.match(output, /nothing is pushed/);
+    assert.equal(repo.git('ls-remote', '--tags', 'origin'), '');
+    assert.equal(ran(calls, 'gh', 'release', 'create'), false);
+  });
+
+  it('does not publish it again in the next run', () => {
+    const repo = single({ pendingChangeset: false });
+    repo.git('tag', '-a', 'v0.0.2', '-m', 'v0.0.2');
+    const { output, calls } = runReleaseExpectingFailure({
+      root: repo.root,
+      scenario: {
+        tagShape: 'root',
+        releases: [{ name: 'lonely-package', version: '0.0.2' }],
+        staged,
+      },
+    });
+
+    assert.match(output, /npm stage approve stage-1/);
+    assert.equal(ran(calls, 'npx', 'changeset', 'publish'), false);
+  });
+});
+
+describe('the push', () => {
+  it('sends no tag when origin refuses the branch', () => {
+    const repo = single();
+    const hook = path.join(repo.remote, 'hooks', 'update');
+    writeFileSync(hook, '#!/bin/sh\ncase "$1" in refs/heads/*) exit 1;; esac\n');
+    chmodSync(hook, 0o755);
+
+    const { output, calls } = runReleaseExpectingFailure({
+      root: repo.root,
+      scenario: {
+        tagShape: 'root',
+        releases: [{ name: 'lonely-package', version: '0.0.2' }],
+      },
+    });
+
+    assert.match(output, /origin refused the push/);
+    assert.equal(repo.git('ls-remote', '--tags', 'origin'), '');
+    assert.equal(ran(calls, 'gh', 'release', 'create'), false);
+  });
+
+  it('refuses a tag that a rebase left out of the branch', () => {
+    const repo = single({ pendingChangeset: false });
+    // A run tagged its release commit, then a rebase replaced the commit.
+    repo.git('commit', '--allow-empty', '-m', 'release: v0.0.1');
+    repo.git('tag', '-a', 'v0.0.1', '-m', 'v0.0.1');
+    repo.git('reset', '-q', '--hard', 'HEAD~1');
+    repo.git('commit', '--allow-empty', '-m', 'a commit from origin');
+    repo.git('commit', '--allow-empty', '-m', 'release: v0.0.1');
+
+    const { output } = runReleaseExpectingFailure({
+      root: repo.root,
+      scenario: { tagShape: 'root', releases: [], announced: [] },
+    });
+
+    assert.match(output, /v0\.0\.1 is not in the history of main/);
+    assert.match(output, /git tag -f -a v0\.0\.1 -m v0\.0\.1 <release commit>/);
+    assert.equal(repo.git('ls-remote', '--tags', 'origin'), '');
   });
 });
 

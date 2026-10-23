@@ -44,7 +44,25 @@ const applyVersion = (s) => {
   }
 };
 
+// What `changeset publish` stages goes to this file, because npm shows it only
+// in a later call.
+const stagedFile = () =>
+  path.join(path.dirname(process.env.SHIM_SCENARIO), 'staged.json');
+
+const stagedItems = (s) => {
+  let byPublish = [];
+  try {
+    byPublish = JSON.parse(readFileSync(stagedFile(), 'utf8'));
+  } catch {
+    // No publish staged a version.
+  }
+  return [...(s.staged ?? []), ...byPublish];
+};
+
 const createTags = (s) => {
+  if (s.stagedByPublish) {
+    writeFileSync(stagedFile(), JSON.stringify(s.stagedByPublish));
+  }
   const tags =
     s.tagsCreated ?? s.releases.map((release) => tagFor(release, s.tagShape));
   for (const tag of tags) execFileSync('git', ['tag', tag]);
@@ -59,6 +77,12 @@ export const main = (tool) => {
 
   if (tool === 'npm') {
     if (args[0] === 'whoami') console.log('test-user');
+    if (args[0] === 'stage' && args[1] === 'list') {
+      const items = stagedItems(scenario()).filter(
+        (item) => item.packageName === args[2],
+      );
+      console.log(JSON.stringify(items));
+    }
     return;
   }
 

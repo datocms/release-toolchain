@@ -166,3 +166,18 @@ release answers it as it goes. Without a TTY:
 ```
 NPM_CONFIG_OTP=123456 npm run release
 ```
+
+npm can stage a version in place of publishing it, when the publish needs a 2FA
+approval on npmjs.com. The registry does not show a staged version, and a second
+publish of it fails with a 409. Thus the script stops before the push when the
+publish staged a version, and before the publish when an earlier run staged one.
+The message gives the `npm stage approve` command for each one. Approve them,
+and run the release again.
+
+## A refused push
+
+The branch and the tags go to origin in one `git push --atomic`: origin gets all
+of them or none. When origin has new commits, run `git pull --rebase` and run the
+release again. The rebase gives the release commit a new hash, and the tags stay
+on the old one. The script refuses such a tag before the push, and tells you how
+to move it.

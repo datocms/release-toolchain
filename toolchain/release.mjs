@@ -75,7 +75,7 @@ const main = async () => {
   run('git', ['tag', '-a', tag, '-m', tag]);
 
   step('Pushing to GitHub');
-  run('git', ['push', '--follow-tags', 'origin', branch]);
+  run('git', ['push', '--atomic', '--follow-tags', 'origin', branch]);
 
   step('Publishing the release notes');
   const notes = changelogSection(version()) || `Released \`${tag}\`.`;
